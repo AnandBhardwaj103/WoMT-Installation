@@ -3,7 +3,7 @@ import math
 
 # Page configuration
 st.set_page_config(
-    page_title="Multi-Radio mmWave RF Isolation & Coexistence Simulator v10",
+    page_title="Multi-Radio mmWave RF Isolation Simulator v11",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -66,8 +66,8 @@ st.markdown("""
         background-color: #ffffff;
         border: 1px solid #e2e8f0;
         border-radius: 6px;
-        padding: 10px;
-        margin-bottom: 8px;
+        padding: 12px;
+        margin-bottom: 10px;
         font-size: 0.82rem;
     }
     .detail-card-pass {
@@ -76,14 +76,23 @@ st.markdown("""
     .detail-card-fail {
         border-left: 4px solid #b91c1c;
     }
+    .calc-box {
+        background-color: #f1f5f9;
+        border: 1px solid #cbd5e1;
+        border-radius: 4px;
+        padding: 8px;
+        margin-top: 6px;
+        font-family: monospace;
+        font-size: 0.78rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # Application Header
 st.markdown("""
 <div class="header-card">
-    <div class="header-title">Multi-Radio mmWave Isolation & Coexistence Simulator v10</div>
-    <div class="header-sub">25.7 GHz – 26.5 GHz Band • Includes Antenna Front-to-Back (F/B) & Front-to-Side (F/S) Rejection Ratios</div>
+    <div class="header-title">Multi-Radio mmWave Isolation & Coexistence Simulator v11</div>
+    <div class="header-sub">25.7 GHz – 26.5 GHz Band • Includes Front-to-Back (F/B = 40 dB) and Front-to-Side (F/S) Isolation Rejection</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -95,6 +104,7 @@ MCS_PARAMS = {
 }
 ANTENNA_BEAMWIDTH_DEG = 30
 RADIO_COLORS = ['#2563eb', '#059669', '#7c3aed', '#d97706']
+BASE_COFACING_ISOLATION_DB = 80.0  # Baseline co-facing isolation at 0.5 m
 
 # Layout: 3 Columns
 col_controls, col_vis, col_results = st.columns([1.1, 1.2, 1.3])
@@ -108,11 +118,11 @@ with col_controls:
     mcs = st.radio("Modulation Scheme (MCS)", ['64QAM', '16QAM', 'QPSK'], index=0, horizontal=True)
     margin = st.slider("Uncertainty Safety Margin (dB)", min_value=0.0, max_value=10.0, value=5.0, step=0.5)
 
-    st.subheader("ANTENNA PATTERN PARAMETERS")
-    fb_ratio = st.slider("Front-to-Back (F/B) Ratio (dB)", min_value=15.0, max_value=45.0, value=30.0, step=1.0, 
-                         help="Antenna isolation gain at 180° back-to-back orientation.")
+    st.subheader("ANTENNA REJECTION RATIOS")
+    fb_ratio = st.slider("Front-to-Back (F/B) Ratio (dB)", min_value=15.0, max_value=50.0, value=40.0, step=1.0, 
+                         help="Additional rejection added when antennas are oriented 180° back-to-back.")
     fs_ratio = st.slider("Front-to-Side (F/S) Ratio (dB)", min_value=10.0, max_value=35.0, value=20.0, step=1.0, 
-                         help="Antenna isolation gain at 90° off-axis side orientation.")
+                         help="Additional rejection added when antennas are oriented 90° side-by-side.")
 
     st.subheader("PER-RADIO CONFIGURATION")
     
@@ -169,23 +179,24 @@ for i in range(len(radios)):
             acs_level = -82.95 + param['snr'] + acs_fitting
             req_iso = param['txPower'] - acs_level
 
-        # Distance & Path Loss
+        # 1. Distance Attenuation Gain/Loss relative to 0.5m
         vert_diff = abs(rA['vert'] - rB['vert'])
         horiz_diff = abs(rA['horiz'] - rB['horiz'])
         total_distance = max(0.1, math.sqrt(vert_diff**2 + horiz_diff**2))
         dist_gain = 20.0 * math.log10(total_distance / 0.5)
 
-        # Angular Off-Axis Attenuation utilizing F/S and F/B Ratios
+        # 2. Angular Deviation & Antenna Pattern Rejection Calculation (F/B & F/S)
         rel_angle = abs(rA['angle'] - rB['angle']) % 360
-        dev_angle = min(rel_angle, 360 - rel_angle)  # 0 deg (co-facing) to 180 deg (back-to-back)
+        dev_angle = min(rel_angle, 360 - rel_angle)  # Ranges from 0° (Co-facing) to 180° (Back-to-Back)
 
         if dev_angle <= 90.0:
             antenna_pattern_rejection = (dev_angle / 90.0) * fs_ratio
         else:
             antenna_pattern_rejection = fs_ratio + ((dev_angle - 90.0) / 90.0) * (fb_ratio - fs_ratio)
 
-        # Base Co-facing Isolation (65 dB) + Distance Loss/Gain + Antenna Pattern Off-Axis Rejection
-        achieved_iso = 65.0 + dist_gain + antenna_pattern_rejection
+        # 3. Total Achieved Isolation
+        achieved_iso = BASE_COFACING_ISOLATION_DB + dist_gain + antenna_pattern_rejection
+        coupling_db = -achieved_iso
         gap_of_iso = req_iso + margin - achieved_iso
 
         has_beam_overlap = is_channel_overlap and (dev_angle < ANTENNA_BEAMWIDTH_DEG)
@@ -198,13 +209,16 @@ for i in range(len(radios)):
             'pairName': f"R{rA['id']} ↔ R{rB['id']}",
             'rA': rA,
             'rB': rB,
+            'devAngle': dev_angle,
             'centerFreqDiffMHz': center_freq_diff_mhz,
             'guardBandGapMHz': guard_band_gap_mhz,
             'isChannelOverlap': is_channel_overlap,
             'reqIso': req_iso,
-            'achievedIso': achieved_iso,
-            'gapOfIso': gap_of_iso,
+            'distGain': dist_gain,
             'antennaRejection': antenna_pattern_rejection,
+            'achievedIso': achieved_iso,
+            'couplingDb': coupling_db,
+            'gapOfIso': gap_of_iso,
             'hasBeamOverlap': has_beam_overlap,
             'pass': pair_pass
         })
@@ -262,7 +276,7 @@ with col_results:
     else:
         st.markdown('<div class="status-badge-fail">SYSTEM FAIL</div>', unsafe_allow_html=True)
 
-    st.subheader("INTER-RADIO ISOLATION ANALYSIS")
+    st.subheader("INTER-RADIO ISOLATION BREAKDOWN")
 
     for res in pair_results:
         pass_class = "detail-card-pass" if res['pass'] else "detail-card-fail"
@@ -275,10 +289,16 @@ with col_results:
                 <span>Pair {res['pairName']} ({res['rA']['freq']:.2f} GHz vs {res['rB']['freq']:.2f} GHz)</span>
                 <span style="color:{'#15803d' if res['pass'] else '#b91c1c'}">{'PASS' if res['pass'] else 'FAIL'}</span>
             </div>
-            <div>Center Freq Separation (Δf): <strong>{res['centerFreqDiffMHz']} MHz</strong></div>
-            <div>Guard Band Gap: <strong>{gap_desc}</strong></div>
-            <div>Antenna Off-Axis Rejection (F/B & F/S): <strong>+{res['antennaRejection']:.1f} dB</strong></div>
-            <div>3D Distance: <strong>{dist_cm} cm</strong> | Req: <strong>{res['reqIso']:.1f} dB</strong> | Achieved: <strong>{res['achievedIso']:.1f} dB</strong></div>
-            <div>Iso Margin / Deficit: <strong style="color:{'#15803d' if res['gapOfIso']<=0 else '#b91c1c'}">{res['gapOfIso']:.2f} dB</strong></div>
+            <div>Center Freq Separation (Δf): <strong>{res['centerFreqDiffMHz']} MHz</strong> | Guard Gap: <strong>{gap_desc}</strong></div>
+            <div>Relative Angle: <strong>{res['devAngle']:.0f}°</strong> | 3D Distance: <strong>{dist_cm} cm</strong></div>
+            <div class="calc-box">
+                <b>Isolation Formula:</b><br/>
+                Base Co-Facing: 80.0 dB<br/>
+                + Distance Loss: {res['distGain']:+.2f} dB<br/>
+                + Antenna Pattern Rejection (F/B & F/S): +{res['antennaRejection']:.2f} dB<br/>
+                ------------------------------------------------<br/>
+                = Total Isolation: <b>{res['achievedIso']:.2f} dB</b> (Coupling: <b>{res['couplingDb']:.2f} dB</b>)<br/>
+                Required Isolation: <b>{res['reqIso']:.2f} dB</b> | Margin/Deficit: <b style="color:{'#15803d' if res['gapOfIso']<=0 else '#b91c1c'}">{res['gapOfIso']:.2f} dB</b>
+            </div>
         </div>
         """, unsafe_allow_html=True)
