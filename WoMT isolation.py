@@ -1,9 +1,5 @@
 import streamlit as st
-import pandas as pd
-import numpy as np
 import math
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 
 # Page configuration
 st.set_page_config(
@@ -22,10 +18,6 @@ st.markdown("""
     }
     .stApp {
         background-color: #f8fafc;
-    }
-    div[data-testid="stSidebar"] {
-        background-color: #ffffff;
-        border-right: 1px solid #e2e8f0;
     }
     .header-card {
         background-color: #ffffff;
@@ -71,12 +63,12 @@ st.markdown("""
         margin-bottom: 15px;
     }
     .detail-card {
-        background-color: #f1f5f9;
+        background-color: #ffffff;
         border: 1px solid #e2e8f0;
         border-radius: 6px;
         padding: 10px;
         margin-bottom: 8px;
-        font-size: 0.8rem;
+        font-size: 0.82rem;
     }
     .detail-card-pass {
         border-left: 4px solid #15803d;
@@ -207,44 +199,49 @@ for i in range(len(radios)):
             'pass': pair_pass
         })
 
-# --- CENTER COLUMN: LIVE VISUALIZER ---
+# --- CENTER COLUMN: SVG VISUALIZER (NO MATPLOTLIB NEEDED) ---
 with col_vis:
     st.subheader("POLE MOUNT VISUALIZATION")
     
-    fig, ax = plt.subplots(figsize=(5, 6), facecolor='#ffffff')
-    ax.set_facecolor('#f1f5f9')
-
     max_vert = max([r['vert'] for r in radios] + [0.5])
+    vert_scale = 180 / max(0.8, max_vert)
     
-    # Pole Drawing
-    ax.plot([0, 0], [-0.2, max_vert + 0.3], color='#475569', linewidth=8, zorder=1)
+    svg_elements = [
+        '<svg width="100%" height="480" viewBox="0 0 400 500" xmlns="http://www.w3.org/2000/svg" style="background:#f1f5f9; border-radius:8px; border:1px solid #e2e8f0;">',
+        '<!-- Central Pole -->',
+        '<rect x="192" y="40" width="16" height="400" fill="#475569" rx="2"/>'
+    ]
 
     for idx, r in enumerate(radios):
         color = RADIO_COLORS[idx % len(RADIO_COLORS)]
+        ry = 60 + (r['vert'] * vert_scale)
+        horiz_px = r['horiz'] * 90
         angle_rad = math.radians(180 - r['angle'])
-        bx = r['horiz'] * math.cos(angle_rad)
-        by = r['vert'] + r['horiz'] * math.sin(angle_rad)
 
-        # Bracket
-        ax.plot([0, bx], [r['vert'], by], color='#64748b', linewidth=2, zorder=2)
+        bx = 200 + horiz_px * math.cos(angle_rad)
+        by = ry + horiz_px * math.sin(angle_rad)
 
-        # Beam Cone
-        beam_angle = math.degrees(angle_rad)
-        wedge = patches.Wedge((bx, by), r=0.45, theta1=beam_angle - 15, theta2=beam_angle + 15,
-                              color=color, alpha=0.25, zorder=3)
-        ax.add_patch(wedge)
+        # Bracket Line
+        svg_elements.append(f'<line x1="200" y1="{ry}" x2="{bx}" y2="{by}" stroke="#64748b" stroke-width="3"/>')
 
-        # Radio Circle
-        ax.scatter(bx, by, color=color, s=200, zorder=4, edgecolors='white', linewidth=1.5)
-        ax.text(bx, by + 0.08, f"R{r['id']} ({r['freq']:.2f}G)", color='#0f172a',
-                fontsize=8, fontweight='bold', ha='center', va='bottom', zorder=5)
+        # Beam Cone Arc
+        a1 = angle_rad - 0.28
+        a2 = angle_rad + 0.28
+        x1 = bx + 70 * math.cos(a1)
+        y1 = by + 70 * math.sin(a1)
+        x2 = bx + 70 * math.cos(a2)
+        y2 = by + 70 * math.sin(a2)
+        
+        svg_elements.append(f'<path d="M {bx} {by} L {x1} {y1} A 70 70 0 0 1 {x2} {y2} Z" fill="{color}" opacity="0.2"/>')
 
-    ax.set_xlim(-1.8, 1.8)
-    ax.set_ylim(-0.3, max_vert + 0.5)
-    ax.set_aspect('equal')
-    ax.axis('off')
-    plt.tight_layout()
-    st.pyplot(fig, use_container_width=True)
+        # Radio Node Circle
+        svg_elements.append(f'<circle cx="{bx}" cy="{by}" r="14" fill="{color}" stroke="#ffffff" stroke-width="2"/>')
+        
+        # Label
+        svg_elements.append(f'<text x="{bx}" y="{by - 20}" fill="#0f172a" font-size="11" font-weight="bold" text-anchor="middle">R{r["id"]} ({r["freq"]:.2f}G)</text>')
+
+    svg_elements.append('</svg>')
+    st.components.v1.html("\n".join(svg_elements), height=490)
 
 # --- RIGHT COLUMN: RESULTS ---
 with col_results:
@@ -257,23 +254,6 @@ with col_results:
 
     st.subheader("INTER-RADIO ISOLATION ANALYSIS")
 
-    table_data = []
-    for res in pair_results:
-        gap_str = "Overlap (0 MHz)" if res['isChannelOverlap'] else f"{res['guardBandGapMHz']} MHz"
-        verdict_str = "PASS" if res['pass'] else ("FAIL (Beam)" if res['hasBeamOverlap'] else "FAIL (Iso)")
-        table_data.append({
-            "Pair": res['pairName'],
-            "Center Sep": f"Δf: {res['centerFreqDiffMHz']} MHz",
-            "Guard Gap": gap_str,
-            "Req Iso": f"{res['reqIso']:.1f} dB",
-            "Ach Iso": f"{res['achievedIso']:.1f} dB",
-            "Verdict": verdict_str
-        })
-
-    df_table = pd.DataFrame(table_data)
-    st.dataframe(df_table, use_container_width=True, hide_index=True)
-
-    st.subheader("PAIRWISE DETAIL MATRIX")
     for res in pair_results:
         pass_class = "detail-card-pass" if res['pass'] else "detail-card-fail"
         dist_cm = int(math.sqrt((res['rA']['vert'] - res['rB']['vert'])**2 + (res['rA']['horiz'] - res['rB']['horiz'])**2) * 100)
